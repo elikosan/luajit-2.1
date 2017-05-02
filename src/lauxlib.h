@@ -4,6 +4,10 @@
 ** See Copyright Notice in lua.h
 */
 
+#if !defined(LUA_CORE) && !defined(LUA_LIB) && defined(LUAJIT_ENABLE_LUA52COMPAT)
+#include "compat-5.2.h"
+#endif
+
 
 #ifndef lauxlib_h
 #define lauxlib_h
