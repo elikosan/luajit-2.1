@@ -141,23 +141,15 @@ LUA_API void luaL_pushresult (luaL_Buffer_52 *B);
 #define lua_pushglobaltable(L) \
   lua_pushvalue(L, LUA_GLOBALSINDEX)
 
-#define luaL_newlib(L, l) \
-  (lua_newtable((L)),luaL_setfuncs((L), (l), 0))
-
 LUA_API void luaL_checkversion (lua_State *L);
 
 #endif /* Lua 5.0 *or* 5.1 */
 
 LUA_API int lua_absindex (lua_State *L, int i);
-LUA_API void lua_copy (lua_State *L, int from, int to);
 LUA_API void lua_rawgetp (lua_State *L, int i, const void *p);
 LUA_API void lua_rawsetp (lua_State *L, int i, const void *p);
-LUA_API void *luaL_testudata (lua_State *L, int i, const char *tname);
-LUA_API lua_Number lua_tonumberx (lua_State *L, int i, int *isnum);
 LUA_API void lua_getuservalue (lua_State *L, int i);
 LUA_API void lua_setuservalue (lua_State *L, int i);
-LUA_API void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
-LUA_API void luaL_setmetatable (lua_State *L, const char *tname);
 LUA_API int luaL_getsubtable (lua_State *L, int i, const char *name);
 LUA_API void luaL_traceback (lua_State *L, lua_State *L1, const char *msg, int level);
 LUA_API int luaL_fileresult (lua_State *L, int stat, const char *fname);

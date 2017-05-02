@@ -14,15 +14,6 @@ LUA_API int lua_absindex (lua_State *L, int i) {
   return i;
 }
 
-
-void lua_copy (lua_State *L, int from, int to) {
-  int abs_to = lua_absindex(L, to);
-  luaL_checkstack(L, 1, "not enough stack slots");
-  lua_pushvalue(L, from);
-  lua_replace(L, abs_to);
-}
-
-
 void lua_rawgetp (lua_State *L, int i, const void *p) {
   int abs_i = lua_absindex(L, i);
   lua_pushlightuserdata(L, (void*)p);
@@ -35,32 +26,6 @@ void lua_rawsetp (lua_State *L, int i, const void *p) {
   lua_pushlightuserdata(L, (void*)p);
   lua_insert(L, -2);
   lua_rawset(L, abs_i);
-}
-
-
-void *luaL_testudata (lua_State *L, int i, const char *tname) {
-  void *p = lua_touserdata(L, i);
-  luaL_checkstack(L, 2, "not enough stack slots");
-  if (p == NULL || !lua_getmetatable(L, i))
-    return NULL;
-  else {
-    int res = 0;
-    luaL_getmetatable(L, tname);
-    res = lua_rawequal(L, -1, -2);
-    lua_pop(L, 2);
-    if (!res)
-      p = NULL;
-  }
-  return p;
-}
-
-
-lua_Number lua_tonumberx (lua_State *L, int i, int *isnum) {
-  lua_Number n = lua_tonumber(L, i);
-  if (isnum != NULL) {
-    *isnum = (n != 0 || lua_isnumber(L, i));
-  }
-  return n;
 }
 
 
@@ -117,25 +82,7 @@ void lua_setuservalue (lua_State *L, int i) {
 /*
 ** Adapted from Lua 5.2.0
 */
-void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup) {
-  luaL_checkstack(L, nup+1, "too many upvalues");
-  for (; l->name != NULL; l++) {  /* fill the table with given functions */
-    int i;
-    lua_pushstring(L, l->name);
-    for (i = 0; i < nup; i++)  /* copy upvalues to the top */
-      lua_pushvalue(L, -(nup + 1));
-    lua_pushcclosure(L, l->func, nup);  /* closure with those upvalues */
-    lua_settable(L, -(nup + 3)); /* table must be below the upvalues, the name and the closure */
-  }
-  lua_pop(L, nup);  /* remove upvalues */
-}
 
-
-void luaL_setmetatable (lua_State *L, const char *tname) {
-  luaL_checkstack(L, 1, "not enough stack slots");
-  luaL_getmetatable(L, tname);
-  lua_setmetatable(L, -2);
-}
 
 
 int luaL_getsubtable (lua_State *L, int i, const char *name) {
