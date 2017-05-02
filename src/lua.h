@@ -5,9 +5,27 @@
 ** See Copyright Notice at the end of this file
 */
 
+#if !defined(LUA_CORE) && !defined(LUA_LIB) && defined(LUAJIT_ENABLE_LUA52COMPAT)
+#include "compat-5.2.h"
+#endif
 
 #ifndef lua_h
 #define lua_h
+
+#ifdef WIN32
+# ifndef LUA_WIN
+#  define LUA_WIN
+# endif
+# ifndef _WIN32
+#  define _WIN32
+# endif
+
+# if !defined LUA_LIB & !defined LUA_CORE & !defined luajit_c  &  !defined _LJ_ARCH_H &  !defined _LJ_DEF_H & !defined _LJ_OBJ_H
+#  pragma comment( lib, "libluajit.lib") 
+# endif
+
+#endif
+
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -22,6 +40,8 @@
 #define LUA_COPYRIGHT	"Copyright (C) 1994-2008 Lua.org, PUC-Rio"
 #define LUA_AUTHORS	"R. Ierusalimschy, L. H. de Figueiredo & W. Celes"
 
+#define LUA_VERSION_MAJOR	"5"
+#define LUA_VERSION_MINOR	"1"
 
 /* mark for precompiled code (`<esc>Lua') */
 #define	LUA_SIGNATURE	"\033Lua"
