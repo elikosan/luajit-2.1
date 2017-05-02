@@ -84,7 +84,6 @@ LUA_API void lua_pushunsigned (lua_State *L, lua_Unsigned n);
 LUA_API lua_Unsigned luaL_checkunsigned (lua_State *L, int i);
 LUA_API lua_Unsigned lua_tounsignedx (lua_State *L, int i, int *isnum);
 LUA_API lua_Unsigned luaL_optunsigned (lua_State *L, int i, lua_Unsigned def);
-LUA_API lua_Integer lua_tointegerx (lua_State *L, int i, int *isnum);
 LUA_API void lua_len (lua_State *L, int i);
 LUA_API int luaL_len (lua_State *L, int i);
 LUA_API const char *luaL_tolstring (lua_State *L, int idx, size_t *len);
