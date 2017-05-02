@@ -480,15 +480,6 @@ lua_Unsigned luaL_optunsigned (lua_State *L, int i, lua_Unsigned def) {
 }
 
 
-lua_Integer lua_tointegerx (lua_State *L, int i, int *isnum) {
-  lua_Integer n = lua_tointeger(L, i);
-  if (isnum != NULL) {
-    *isnum = (n != 0 || lua_isnumber(L, i));
-  }
-  return n;
-}
-
-
 void lua_len (lua_State *L, int i) {
   switch (lua_type(L, i)) {
     case LUA_TSTRING: /* fall through */
