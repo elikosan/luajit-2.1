@@ -48,7 +48,7 @@ if exist minilua.exe.manifest^
 minilua %DASM% -LN %DASMFLAGS% -o host\buildvm_arch.h %DASC%
 @if errorlevel 1 goto :BAD
 
-@if "%2" neq "lua52compat" goto :NOLUA52COMPAT
+@if "%1" neq "lua52compat" goto :NOLUA52COMPAT
 @shift
 @set LJCOMPILE=%LJCOMPILE% /DLUAJIT_ENABLE_LUA52COMPAT
 :NOLUA52COMPAT
