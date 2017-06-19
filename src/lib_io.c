@@ -26,6 +26,10 @@
 #include "lj_ff.h"
 #include "lj_lib.h"
 
+#if LJ_UTF8
+#include "lioutf8.h"
+#endif
+
 /* Userdata payload for I/O file. */
 typedef struct IOFileUD {
   FILE *fp;		/* File handle. */
@@ -84,7 +88,11 @@ static IOFileUD *io_file_open(lua_State *L, const char *mode)
 {
   const char *fname = strdata(lj_lib_checkstr(L, 1));
   IOFileUD *iof = io_file_new(L);
+#if LJ_UTF8
+  iof->fp = utf8_fopen(fname, mode);
+#else
   iof->fp = fopen(fname, mode);
+#endif
   if (iof->fp == NULL)
     luaL_argerror(L, 1, lj_strfmt_pushf(L, "%s: %s", fname, strerror(errno)));
   return iof;
@@ -400,7 +408,11 @@ LJLIB_CF(io_open)
   GCstr *s = lj_lib_optstr(L, 2);
   const char *mode = s ? strdata(s) : "r";
   IOFileUD *iof = io_file_new(L);
+#if LJ_UTF8
+  iof->fp = utf8_fopen(fname, mode);
+#else
   iof->fp = fopen(fname, mode);
+#endif
   return iof->fp != NULL ? 1 : luaL_fileresult(L, 0, fname);
 }
 
@@ -414,9 +426,17 @@ LJLIB_CF(io_popen)
   iof->type = IOFILE_TYPE_PIPE;
 #if LJ_TARGET_POSIX
   fflush(NULL);
+#if LJ_UTF8
+  iof->fp = utf8_popen(fname, mode);
+#else
   iof->fp = popen(fname, mode);
+#endif
+#else
+#if LJ_UTF8
+  iof->fp = utf8_popen(fname, mode);
 #else
   iof->fp = _popen(fname, mode);
+#endif
 #endif
   return iof->fp != NULL ? 1 : luaL_fileresult(L, 0, fname);
 #else
