@@ -17,10 +17,6 @@
 #include "lj_err.h"
 #include "lj_lib.h"
 
-#if LJ_UTF8
-#include "lioutf8.h"
-#endif
-
 /* ------------------------------------------------------------------------ */
 
 /* Error codes for ll_loadfunc. */
@@ -84,21 +80,6 @@ BOOL WINAPI GetModuleHandleExA(DWORD, LPCSTR, HMODULE*);
 
 static void setprogdir(lua_State *L)
 {
-#if LJ_UTF8
-  wchar_t wbuff[MAX_PATH + 1];
-  wchar_t *lb;
-  DWORD nsize = sizeof(wbuff) / sizeof(wchar_t);
-  DWORD n = GetModuleFileNameW(NULL, wbuff, nsize);
-  if (n == 0 || n == nsize || (lb = wcsrchr(wbuff, '\\')) == NULL) {
-    luaL_error(L, "unable to get ModuleFileName");
-  } else {
-    *lb = '\0';
-    char *buff = wc2cc(wbuff);
-    luaL_gsub(L, lua_tostring(L, -1), LUA_EXECDIR, buff);
-    lua_remove(L, -2);  /* remove original string */
-    free(buff);
-  }
-#else
   char buff[MAX_PATH + 1];
   char *lb;
   DWORD nsize = sizeof(buff);
@@ -110,7 +91,6 @@ static void setprogdir(lua_State *L)
     luaL_gsub(L, lua_tostring(L, -1), LUA_EXECDIR, buff);
     lua_remove(L, -2);  /* remove original string */
   }
-#endif
 }
 
 static void pusherror(lua_State *L)
@@ -139,13 +119,7 @@ static void ll_unloadlib(void *lib)
 
 static void *ll_load(lua_State *L, const char *path, int gl)
 {
-#if LJ_UTF8
-  wchar_t *wpath = cc2wc(path);
-  HINSTANCE lib = LoadLibraryExW(wpath, NULL, 0);
-  free(wpath);
-#else
   HINSTANCE lib = LoadLibraryExA(path, NULL, 0);
-#endif
   if (lib == NULL) pusherror(L);
   UNUSED(gl);
   return lib;
@@ -295,11 +269,7 @@ static int lj_cf_package_unloadlib(lua_State *L)
 
 static int readable(const char *filename)
 {
-#if LJ_UTF8
-  FILE *f = utf8_fopen(filename, "r");  /* try to open file */
-#else
   FILE *f = fopen(filename, "r");  /* try to open file */
-#endif
   if (f == NULL) return 0;  /* open failed */
   fclose(f);
   return 1;
@@ -557,24 +527,16 @@ static void setpath(lua_State *L, const char *fieldname, const char *envname,
   const char *path = NULL;
   UNUSED(envname);
 #else
-#if LJ_UTF8
-  char *path = utf8_getenv(envname);
-#else
   const char *path = getenv(envname);
-#endif
 #endif
   if (path == NULL || noenv) {
     lua_pushstring(L, def);
   } else {
-    const char *path_sub;
-    path_sub = luaL_gsub(L, path, LUA_PATHSEP LUA_PATHSEP,
+    path = luaL_gsub(L, path, LUA_PATHSEP LUA_PATHSEP,
 			      LUA_PATHSEP AUXMARK LUA_PATHSEP);
-    luaL_gsub(L, path_sub, AUXMARK, def);
+    luaL_gsub(L, path, AUXMARK, def);
     lua_remove(L, -2);
   }
-#if !LJ_TARGET_CONSOLE && LJ_UTF8
-  free(path);
-#endif
   setprogdir(L);
   lua_setfield(L, -2, fieldname);
 }

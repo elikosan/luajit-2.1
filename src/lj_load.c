@@ -23,10 +23,6 @@
 #include "lj_bcdump.h"
 #include "lj_parse.h"
 
-#if LJ_UTF8
-#include "lioutf8.h"
-#endif
-
 /* -- Load Lua source code and bytecode ----------------------------------- */
 
 static TValue *cpparser(lua_State *L, lua_CFunction dummy, void *ud)
@@ -92,11 +88,7 @@ LUALIB_API int luaL_loadfilex(lua_State *L, const char *filename,
   int status;
   const char *chunkname;
   if (filename) {
-#if LJ_UTF8
-    ctx.fp = utf8_fopen(filename, "rb");
-#else
     ctx.fp = fopen(filename, "rb");
-#endif
     if (ctx.fp == NULL) {
       lua_pushfstring(L, "cannot open %s: %s", filename, strerror(errno));
       return LUA_ERRFILE;
