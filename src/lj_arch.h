@@ -564,4 +564,11 @@
 #define LJ_52			0
 #endif
 
+/* Enale UTF-8 script support */
+#ifdef LUAJIT_ENABLE_UTF8SCRIPT
+#define LJ_UTF8			1
+#else
+#define LJ_UTF8			0
+#endif
+
 #endif

@@ -1,0 +1,2454 @@
+diff --git a/src/lib_io.c b/src/lib_io.c
+index 9763ed4..65791d3 100644
+--- a/src/lib_io.c
++++ b/src/lib_io.c
+@@ -26,6 +26,10 @@
+ #include "lj_ff.h"
+ #include "lj_lib.h"
+ 
++#if LJ_UTF8
++#include "lioutf8.h"
++#endif
++
+ /* Userdata payload for I/O file. */
+ typedef struct IOFileUD {
+   FILE *fp;		/* File handle. */
+@@ -84,7 +88,11 @@ static IOFileUD *io_file_open(lua_State *L, const char *mode)
+ {
+   const char *fname = strdata(lj_lib_checkstr(L, 1));
+   IOFileUD *iof = io_file_new(L);
++#if LJ_UTF8
++  iof->fp = utf8_fopen(fname, mode);
++#else
+   iof->fp = fopen(fname, mode);
++#endif
+   if (iof->fp == NULL)
+     luaL_argerror(L, 1, lj_strfmt_pushf(L, "%s: %s", fname, strerror(errno)));
+   return iof;
+@@ -400,7 +408,11 @@ LJLIB_CF(io_open)
+   GCstr *s = lj_lib_optstr(L, 2);
+   const char *mode = s ? strdata(s) : "r";
+   IOFileUD *iof = io_file_new(L);
++#if LJ_UTF8
++  iof->fp = utf8_fopen(fname, mode);
++#else
+   iof->fp = fopen(fname, mode);
++#endif
+   return iof->fp != NULL ? 1 : luaL_fileresult(L, 0, fname);
+ }
+ 
+@@ -414,10 +426,18 @@ LJLIB_CF(io_popen)
+   iof->type = IOFILE_TYPE_PIPE;
+ #if LJ_TARGET_POSIX
+   fflush(NULL);
++#if LJ_UTF8
++  iof->fp = utf8_popen(fname, mode);
++#else
+   iof->fp = popen(fname, mode);
++#endif
++#else
++#if LJ_UTF8
++  iof->fp = utf8_popen(fname, mode);
+ #else
+   iof->fp = _popen(fname, mode);
+ #endif
++#endif
+   return iof->fp != NULL ? 1 : luaL_fileresult(L, 0, fname);
+ #else
+   return luaL_error(L, LUA_QL("popen") " not supported");
+diff --git a/src/lib_package.c b/src/lib_package.c
+index 6fac43e..ebf7eac 100644
+--- a/src/lib_package.c
++++ b/src/lib_package.c
+@@ -17,6 +17,10 @@
+ #include "lj_err.h"
+ #include "lj_lib.h"
+ 
++#if LJ_UTF8
++#include "lioutf8.h"
++#endif
++
+ /* ------------------------------------------------------------------------ */
+ 
+ /* Error codes for ll_loadfunc. */
+@@ -80,6 +84,21 @@ BOOL WINAPI GetModuleHandleExA(DWORD, LPCSTR, HMODULE*);
+ 
+ static void setprogdir(lua_State *L)
+ {
++#if LJ_UTF8
++  wchar_t wbuff[MAX_PATH + 1];
++  wchar_t *lb;
++  DWORD nsize = sizeof(wbuff) / sizeof(wchar_t);
++  DWORD n = GetModuleFileNameW(NULL, wbuff, nsize);
++  if (n == 0 || n == nsize || (lb = wcsrchr(wbuff, '\\')) == NULL) {
++    luaL_error(L, "unable to get ModuleFileName");
++  } else {
++    *lb = '\0';
++    char *buff = wc2cc(wbuff);
++    luaL_gsub(L, lua_tostring(L, -1), LUA_EXECDIR, buff);
++    lua_remove(L, -2);  /* remove original string */
++    free(buff);
++  }
++#else
+   char buff[MAX_PATH + 1];
+   char *lb;
+   DWORD nsize = sizeof(buff);
+@@ -91,6 +110,7 @@ static void setprogdir(lua_State *L)
+     luaL_gsub(L, lua_tostring(L, -1), LUA_EXECDIR, buff);
+     lua_remove(L, -2);  /* remove original string */
+   }
++#endif
+ }
+ 
+ static void pusherror(lua_State *L)
+@@ -119,7 +139,13 @@ static void ll_unloadlib(void *lib)
+ 
+ static void *ll_load(lua_State *L, const char *path, int gl)
+ {
++#if LJ_UTF8
++  wchar_t *wpath = cc2wc(path);
++  HINSTANCE lib = LoadLibraryExW(wpath, NULL, 0);
++  free(wpath);
++#else
+   HINSTANCE lib = LoadLibraryExA(path, NULL, 0);
++#endif
+   if (lib == NULL) pusherror(L);
+   UNUSED(gl);
+   return lib;
+@@ -269,7 +295,11 @@ static int lj_cf_package_unloadlib(lua_State *L)
+ 
+ static int readable(const char *filename)
+ {
++#if LJ_UTF8
++  FILE *f = utf8_fopen(filename, "r");  /* try to open file */
++#else
+   FILE *f = fopen(filename, "r");  /* try to open file */
++#endif
+   if (f == NULL) return 0;  /* open failed */
+   fclose(f);
+   return 1;
+@@ -527,16 +557,24 @@ static void setpath(lua_State *L, const char *fieldname, const char *envname,
+   const char *path = NULL;
+   UNUSED(envname);
+ #else
++#if LJ_UTF8
++  char *path = utf8_getenv(envname);
++#else
+   const char *path = getenv(envname);
+ #endif
++#endif
+   if (path == NULL || noenv) {
+     lua_pushstring(L, def);
+   } else {
+-    path = luaL_gsub(L, path, LUA_PATHSEP LUA_PATHSEP,
++    const char *path_sub;
++    path_sub = luaL_gsub(L, path, LUA_PATHSEP LUA_PATHSEP,
+ 			      LUA_PATHSEP AUXMARK LUA_PATHSEP);
+-    luaL_gsub(L, path, AUXMARK, def);
++    luaL_gsub(L, path_sub, AUXMARK, def);
+     lua_remove(L, -2);
+   }
++#if !LJ_TARGET_CONSOLE && LJ_UTF8
++  free(path);
++#endif
+   setprogdir(L);
+   lua_setfield(L, -2, fieldname);
+ }
+diff --git a/src/lj_arch.h b/src/lj_arch.h
+index c8d7138..e9df873 100644
+--- a/src/lj_arch.h
++++ b/src/lj_arch.h
+@@ -564,4 +564,11 @@
+ #define LJ_52			0
+ #endif
+ 
++/* Enale UTF-8 script support */
++#ifdef LUAJIT_ENABLE_UTF8SCRIPT
++#define LJ_UTF8			1
++#else
++#define LJ_UTF8			0
++#endif
++
+ #endif
+diff --git a/src/lj_bcdef.h b/src/lj_bcdef.h
+deleted file mode 100644
+index 231ed3a..0000000
+--- a/src/lj_bcdef.h
++++ /dev/null
+@@ -1,226 +0,0 @@
+-/* This is a generated file. DO NOT EDIT! */
+-
+-LJ_DATADEF const uint16_t lj_bc_ofs[] = {
+-0,
+-72,
+-144,
+-216,
+-288,
+-427,
+-569,
+-632,
+-695,
+-764,
+-833,
+-886,
+-938,
+-989,
+-1040,
+-1081,
+-1122,
+-1148,
+-1180,
+-1240,
+-1314,
+-1368,
+-1422,
+-1476,
+-1530,
+-1589,
+-1643,
+-1697,
+-1751,
+-1805,
+-1841,
+-1908,
+-1975,
+-2042,
+-2109,
+-2158,
+-2230,
+-2306,
+-2342,
+-2378,
+-2408,
+-2437,
+-2462,
+-2505,
+-2541,
+-2628,
+-2710,
+-2748,
+-2782,
+-2833,
+-2897,
+-3006,
+-3099,
+-3117,
+-3135,
+-3283,
+-3407,
+-3506,
+-3679,
+-3908,
+-4032,
+-4174,
+-4220,
+-4262,
+-4266,
+-4414,
+-4482,
+-4647,
+-4838,
+-4926,
+-4930,
+-5066,
+-5158,
+-5263,
+-5360,
+-5465,
+-5485,
+-5555,
+-5622,
+-5642,
+-5686,
+-5725,
+-5745,
+-5763,
+-5810,
+-5835,
+-5855,
+-5918,
+-5972,
+-5972,
+-6097,
+-6098,
+-6177,
+-7841,
+-7908,
+-8419,
+-8522,
+-8579,
+-8710,
+-7974,
+-8136,
+-8228,
+-8280,
+-8311,
+-8768,
+-8809,
+-9417,
+-8864,
+-9167,
+-9469,
+-9596,
+-9620,
+-9647,
+-9711,
+-9744,
+-9778,
+-9809,
+-9840,
+-9873,
+-9914,
+-9957,
+-9990,
+-10030,
+-10070,
+-10245,
+-10393,
+-10110,
+-10110,
+-9678,
+-10149,
+-10549,
+-10492,
+-10196,
+-10603,
+-10662,
+-11596,
+-11994,
+-11941,
+-12063,
+-12142,
+-12224,
+-12306,
+-12388,
+-11650,
+-11747,
+-11844,
+-10721,
+-10752,
+-10799,
+-10921,
+-11090,
+-11217,
+-11327,
+-11442,
+-11557
+-};
+-
+-LJ_DATADEF const uint16_t lj_bc_mode[] = {
+-BCDEF(BCMODE)
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF,
+-BCMODE_FF
+-};
+-
+diff --git a/src/lj_clib.c b/src/lj_clib.c
+index 6142659..86d9394 100644
+--- a/src/lj_clib.c
++++ b/src/lj_clib.c
+@@ -18,6 +18,10 @@
+ #include "lj_clib.h"
+ #include "lj_strfmt.h"
+ 
++#if LJ_UTF8
++#include "lioutf8.h"
++#endif
++
+ /* -- OS-specific functions ----------------------------------------------- */
+ 
+ #if LJ_TARGET_DLOPEN
+@@ -208,7 +212,13 @@ static const char *clib_extname(lua_State *L, const char *name)
+ static void *clib_loadlib(lua_State *L, const char *name, int global)
+ {
+   DWORD oldwerr = GetLastError();
++#if LJ_UTF8
++  wchar_t *wname = cc2wc(clib_extname(L, name));
++  void *h = (void *)LoadLibraryExW(wname, NULL, 0);
++  free(wname);
++#else
+   void *h = (void *)LoadLibraryExA(clib_extname(L, name), NULL, 0);
++#endif
+   if (!h) clib_error(L, "cannot load module " LUA_QS ": %s", name);
+   SetLastError(oldwerr);
+   UNUSED(global);
+diff --git a/src/lj_ffdef.h b/src/lj_ffdef.h
+deleted file mode 100644
+index 29dd4d3..0000000
+--- a/src/lj_ffdef.h
++++ /dev/null
+@@ -1,210 +0,0 @@
+-/* This is a generated file. DO NOT EDIT! */
+-
+-FFDEF(assert)
+-FFDEF(type)
+-FFDEF(next)
+-FFDEF(pairs)
+-FFDEF(ipairs_aux)
+-FFDEF(ipairs)
+-FFDEF(getmetatable)
+-FFDEF(setmetatable)
+-FFDEF(getfenv)
+-FFDEF(setfenv)
+-FFDEF(rawget)
+-FFDEF(rawset)
+-FFDEF(rawequal)
+-FFDEF(unpack)
+-FFDEF(select)
+-FFDEF(tonumber)
+-FFDEF(tostring)
+-FFDEF(error)
+-FFDEF(pcall)
+-FFDEF(xpcall)
+-FFDEF(loadfile)
+-FFDEF(load)
+-FFDEF(loadstring)
+-FFDEF(dofile)
+-FFDEF(gcinfo)
+-FFDEF(collectgarbage)
+-FFDEF(newproxy)
+-FFDEF(print)
+-FFDEF(coroutine_status)
+-FFDEF(coroutine_running)
+-FFDEF(coroutine_create)
+-FFDEF(coroutine_yield)
+-FFDEF(coroutine_resume)
+-FFDEF(coroutine_wrap_aux)
+-FFDEF(coroutine_wrap)
+-FFDEF(math_abs)
+-FFDEF(math_floor)
+-FFDEF(math_ceil)
+-FFDEF(math_sqrt)
+-FFDEF(math_log10)
+-FFDEF(math_exp)
+-FFDEF(math_sin)
+-FFDEF(math_cos)
+-FFDEF(math_tan)
+-FFDEF(math_asin)
+-FFDEF(math_acos)
+-FFDEF(math_atan)
+-FFDEF(math_sinh)
+-FFDEF(math_cosh)
+-FFDEF(math_tanh)
+-FFDEF(math_frexp)
+-FFDEF(math_modf)
+-FFDEF(math_deg)
+-FFDEF(math_rad)
+-FFDEF(math_log)
+-FFDEF(math_atan2)
+-FFDEF(math_pow)
+-FFDEF(math_fmod)
+-FFDEF(math_ldexp)
+-FFDEF(math_min)
+-FFDEF(math_max)
+-FFDEF(math_random)
+-FFDEF(math_randomseed)
+-FFDEF(bit_tobit)
+-FFDEF(bit_bnot)
+-FFDEF(bit_bswap)
+-FFDEF(bit_lshift)
+-FFDEF(bit_rshift)
+-FFDEF(bit_arshift)
+-FFDEF(bit_rol)
+-FFDEF(bit_ror)
+-FFDEF(bit_band)
+-FFDEF(bit_bor)
+-FFDEF(bit_bxor)
+-FFDEF(bit_tohex)
+-FFDEF(string_len)
+-FFDEF(string_byte)
+-FFDEF(string_char)
+-FFDEF(string_sub)
+-FFDEF(string_rep)
+-FFDEF(string_reverse)
+-FFDEF(string_lower)
+-FFDEF(string_upper)
+-FFDEF(string_dump)
+-FFDEF(string_find)
+-FFDEF(string_match)
+-FFDEF(string_gmatch_aux)
+-FFDEF(string_gmatch)
+-FFDEF(string_gsub)
+-FFDEF(string_format)
+-FFDEF(table_foreachi)
+-FFDEF(table_foreach)
+-FFDEF(table_getn)
+-FFDEF(table_maxn)
+-FFDEF(table_insert)
+-FFDEF(table_remove)
+-FFDEF(table_concat)
+-FFDEF(table_sort)
+-FFDEF(io_method_close)
+-FFDEF(io_method_read)
+-FFDEF(io_method_write)
+-FFDEF(io_method_flush)
+-FFDEF(io_method_seek)
+-FFDEF(io_method_setvbuf)
+-FFDEF(io_method_lines)
+-FFDEF(io_method___gc)
+-FFDEF(io_method___tostring)
+-FFDEF(io_open)
+-FFDEF(io_popen)
+-FFDEF(io_tmpfile)
+-FFDEF(io_close)
+-FFDEF(io_read)
+-FFDEF(io_write)
+-FFDEF(io_flush)
+-FFDEF(io_input)
+-FFDEF(io_output)
+-FFDEF(io_lines)
+-FFDEF(io_type)
+-FFDEF(os_execute)
+-FFDEF(os_remove)
+-FFDEF(os_rename)
+-FFDEF(os_tmpname)
+-FFDEF(os_getenv)
+-FFDEF(os_exit)
+-FFDEF(os_clock)
+-FFDEF(os_date)
+-FFDEF(os_time)
+-FFDEF(os_difftime)
+-FFDEF(os_setlocale)
+-FFDEF(debug_getregistry)
+-FFDEF(debug_getmetatable)
+-FFDEF(debug_setmetatable)
+-FFDEF(debug_getfenv)
+-FFDEF(debug_setfenv)
+-FFDEF(debug_getinfo)
+-FFDEF(debug_getlocal)
+-FFDEF(debug_setlocal)
+-FFDEF(debug_getupvalue)
+-FFDEF(debug_setupvalue)
+-FFDEF(debug_upvalueid)
+-FFDEF(debug_upvaluejoin)
+-FFDEF(debug_sethook)
+-FFDEF(debug_gethook)
+-FFDEF(debug_debug)
+-FFDEF(debug_traceback)
+-FFDEF(jit_on)
+-FFDEF(jit_off)
+-FFDEF(jit_flush)
+-FFDEF(jit_status)
+-FFDEF(jit_attach)
+-FFDEF(jit_util_funcinfo)
+-FFDEF(jit_util_funcbc)
+-FFDEF(jit_util_funck)
+-FFDEF(jit_util_funcuvname)
+-FFDEF(jit_util_traceinfo)
+-FFDEF(jit_util_traceir)
+-FFDEF(jit_util_tracek)
+-FFDEF(jit_util_tracesnap)
+-FFDEF(jit_util_tracemc)
+-FFDEF(jit_util_traceexitstub)
+-FFDEF(jit_util_ircalladdr)
+-FFDEF(jit_opt_start)
+-FFDEF(ffi_meta___index)
+-FFDEF(ffi_meta___newindex)
+-FFDEF(ffi_meta___eq)
+-FFDEF(ffi_meta___len)
+-FFDEF(ffi_meta___lt)
+-FFDEF(ffi_meta___le)
+-FFDEF(ffi_meta___concat)
+-FFDEF(ffi_meta___call)
+-FFDEF(ffi_meta___add)
+-FFDEF(ffi_meta___sub)
+-FFDEF(ffi_meta___mul)
+-FFDEF(ffi_meta___div)
+-FFDEF(ffi_meta___mod)
+-FFDEF(ffi_meta___pow)
+-FFDEF(ffi_meta___unm)
+-FFDEF(ffi_meta___tostring)
+-FFDEF(ffi_meta___pairs)
+-FFDEF(ffi_meta___ipairs)
+-FFDEF(ffi_clib___index)
+-FFDEF(ffi_clib___newindex)
+-FFDEF(ffi_clib___gc)
+-FFDEF(ffi_callback_free)
+-FFDEF(ffi_callback_set)
+-FFDEF(ffi_cdef)
+-FFDEF(ffi_new)
+-FFDEF(ffi_cast)
+-FFDEF(ffi_typeof)
+-FFDEF(ffi_istype)
+-FFDEF(ffi_sizeof)
+-FFDEF(ffi_alignof)
+-FFDEF(ffi_offsetof)
+-FFDEF(ffi_errno)
+-FFDEF(ffi_string)
+-FFDEF(ffi_copy)
+-FFDEF(ffi_fill)
+-FFDEF(ffi_abi)
+-FFDEF(ffi_metatype)
+-FFDEF(ffi_gc)
+-FFDEF(ffi_load)
+-
+-#undef FFDEF
+-
+-#ifndef FF_NUM_ASMFUNC
+-#define FF_NUM_ASMFUNC 62
+-#endif
+-
+diff --git a/src/lj_folddef.h b/src/lj_folddef.h
+deleted file mode 100644
+index c4ec4ef..0000000
+--- a/src/lj_folddef.h
++++ /dev/null
+@@ -1,1068 +0,0 @@
+-/* This is a generated file. DO NOT EDIT! */
+-
+-static const FoldFunc fold_func[] = {
+-  fold_kfold_numarith,
+-  fold_kfold_ldexp,
+-  fold_kfold_fpmath,
+-  fold_kfold_numpow,
+-  fold_kfold_numcomp,
+-  fold_kfold_intarith,
+-  fold_kfold_intovarith,
+-  fold_kfold_bnot,
+-  fold_kfold_bswap,
+-  fold_kfold_intcomp,
+-  fold_kfold_intcomp0,
+-  fold_kfold_int64arith,
+-  fold_kfold_int64arith2,
+-  fold_kfold_int64shift,
+-  fold_kfold_bnot64,
+-  fold_kfold_bswap64,
+-  fold_kfold_int64comp,
+-  fold_kfold_int64comp0,
+-  fold_kfold_snew_kptr,
+-  fold_kfold_snew_empty,
+-  fold_kfold_strref,
+-  fold_kfold_strref_snew,
+-  fold_kfold_strcmp,
+-  fold_kfold_add_kgc,
+-  fold_kfold_add_kptr,
+-  fold_kfold_add_kright,
+-  fold_kfold_tobit,
+-  fold_kfold_conv_kint_num,
+-  fold_kfold_conv_kintu32_num,
+-  fold_kfold_conv_kint_ext,
+-  fold_kfold_conv_kint_i64,
+-  fold_kfold_conv_kint64_num_i64,
+-  fold_kfold_conv_kint64_num_u64,
+-  fold_kfold_conv_kint64_int_i64,
+-  fold_kfold_conv_knum_int_num,
+-  fold_kfold_conv_knum_u32_num,
+-  fold_kfold_conv_knum_i64_num,
+-  fold_kfold_conv_knum_u64_num,
+-  fold_kfold_tostr_knum,
+-  fold_kfold_tostr_kint,
+-  fold_kfold_strto,
+-  lj_opt_cse,
+-  fold_kfold_kref,
+-  fold_shortcut_round,
+-  fold_shortcut_left,
+-  fold_shortcut_dropleft,
+-  fold_shortcut_leftleft,
+-  fold_simplify_numadd_negx,
+-  fold_simplify_numadd_xneg,
+-  fold_simplify_numsub_k,
+-  fold_simplify_numsub_negk,
+-  fold_simplify_numsub_xneg,
+-  fold_simplify_nummuldiv_k,
+-  fold_simplify_nummuldiv_negk,
+-  fold_simplify_nummuldiv_negneg,
+-  fold_simplify_numpow_xk,
+-  fold_simplify_numpow_kx,
+-  fold_shortcut_conv_num_int,
+-  fold_simplify_conv_int_num,
+-  fold_simplify_conv_i64_num,
+-  fold_simplify_conv_int_i64,
+-  fold_simplify_conv_flt_num,
+-  fold_simplify_tobit_conv,
+-  fold_simplify_floor_conv,
+-  fold_simplify_conv_sext,
+-  fold_simplify_conv_narrow,
+-  fold_cse_conv,
+-  fold_narrow_convert,
+-  fold_simplify_intadd_k,
+-  fold_simplify_intmul_k,
+-  fold_simplify_intsub_k,
+-  fold_simplify_intsub_kleft,
+-  fold_simplify_intadd_k64,
+-  fold_simplify_intsub_k64,
+-  fold_simplify_intmul_k32,
+-  fold_simplify_intmul_k64,
+-  fold_simplify_intmod_k,
+-  fold_simplify_intmod_kleft,
+-  fold_simplify_intsub,
+-  fold_simplify_intsubadd_leftcancel,
+-  fold_simplify_intsubsub_leftcancel,
+-  fold_simplify_intsubsub_rightcancel,
+-  fold_simplify_intsubadd_rightcancel,
+-  fold_simplify_intsubaddadd_cancel,
+-  fold_simplify_band_k,
+-  fold_simplify_bor_k,
+-  fold_simplify_bxor_k,
+-  fold_simplify_shift_ik,
+-  fold_simplify_shift_andk,
+-  fold_simplify_shift1_ki,
+-  fold_simplify_shift2_ki,
+-  fold_simplify_shiftk_andk,
+-  fold_simplify_andk_shiftk,
+-  fold_reassoc_intarith_k,
+-  fold_reassoc_intarith_k64,
+-  fold_reassoc_dup,
+-  fold_reassoc_bxor,
+-  fold_reassoc_shift,
+-  fold_reassoc_minmax_k,
+-  fold_reassoc_minmax_left,
+-  fold_reassoc_minmax_right,
+-  fold_abc_fwd,
+-  fold_abc_k,
+-  fold_abc_invar,
+-  fold_comm_swap,
+-  fold_comm_equal,
+-  fold_comm_comp,
+-  fold_comm_dup,
+-  fold_comm_bxor,
+-  fold_merge_eqne_snew_kgc,
+-  lj_opt_fwd_aload,
+-  fold_kfold_hload_kkptr,
+-  lj_opt_fwd_hload,
+-  lj_opt_fwd_uload,
+-  lj_opt_fwd_tab_len,
+-  fold_cse_uref,
+-  lj_opt_fwd_hrefk,
+-  fold_fwd_href_tnew,
+-  fold_fwd_href_tdup,
+-  fold_fload_tab_tnew_asize,
+-  fold_fload_tab_tnew_hmask,
+-  fold_fload_tab_tdup_asize,
+-  fold_fload_tab_tdup_hmask,
+-  fold_fload_tab_ah,
+-  fold_fload_str_len_kgc,
+-  fold_fload_str_len_snew,
+-  fold_fload_cdata_typeid_kgc,
+-  fold_fload_cdata_int64_kgc,
+-  fold_fload_cdata_typeid_cnew,
+-  fold_fload_cdata_ptr_int64_cnew,
+-  lj_opt_cse,
+-  lj_opt_fwd_fload,
+-  fold_fwd_sload,
+-  fold_xload_kptr,
+-  lj_opt_fwd_xload,
+-  fold_barrier_tab,
+-  fold_barrier_tnew_tdup,
+-  lj_opt_dse_ahstore,
+-  lj_opt_dse_ustore,
+-  lj_opt_dse_fstore,
+-  lj_opt_dse_xstore,
+-  lj_ir_emit
+-};
+-
+-static const uint32_t fold_hash[916] = {
+-0xffffffff,
+-0xffffffff,
+-0x5b4c8016,
+-0x0d4e7016,
+-0xffffffff,
+-0x1000701c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x29110c1a,
+-0xffffffff,
+-0xffffffff,
+-0x5b488016,
+-0x0d4a7016,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x7b87fc07,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x0d467016,
+-0xffffffff,
+-0x5a4c73ff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5153fc29,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5d408016,
+-0xffffffff,
+-0x594873ff,
+-0x8187440f,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8287fc0f,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6715ffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2a11fc1a,
+-0xffffffff,
+-0x1daa5a70,
+-0xffffffff,
+-0xffffffff,
+-0x0a0bfc16,
+-0x5c408c16,
+-0x6911ffff,
+-0x8db7ffff,
+-0xffffffff,
+-0xffffffff,
+-0x1caa59d4,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6a0dffff,
+-0x2b68d002,
+-0xffffffff,
+-0x3cab5695,
+-0xffffffff,
+-0x41aaa675,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x27ae5800,
+-0xffffffff,
+-0x6a09ffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x7f865c0f,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6a05ffff,
+-0x42abffff,
+-0x5e44881c,
+-0x5d50a016,
+-0x066c5816,
+-0x00646c1b,
+-0x75753bff,
+-0x1951fc18,
+-0x6264c81b,
+-0x1850641c,
+-0xffffffff,
+-0x6a01ffff,
+-0x87a7ffff,
+-0x4953fc1c,
+-0x8da80000,
+-0x4f52a3ff,
+-0x00606c1b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5d428416,
+-0x88a53800,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x05645816,
+-0xffffffff,
+-0x005c6c1b,
+-0x20aa71d6,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x1399fc16,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x157f33ff,
+-0xffffffff,
+-0xffffffff,
+-0x584dfc20,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8d9bffff,
+-0xffffffff,
+-0x055c5816,
+-0xffffffff,
+-0x00546c1b,
+-0xffffffff,
+-0xffffffff,
+-0x5849fc20,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8c97ffff,
+-0x5543fc1c,
+-0x05585816,
+-0xffffffff,
+-0x00506c1b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8a93ffff,
+-0x26ae6c00,
+-0x05545816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x76753c17,
+-0x41aaa695,
+-0xffffffff,
+-0x898fffff,
+-0xffffffff,
+-0x05505816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x858867ff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x848bffff,
+-0xffffffff,
+-0x054c5816,
+-0x79873c06,
+-0x47525bff,
+-0xffffffff,
+-0x3f695401,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8387ffff,
+-0xffffffff,
+-0x05485816,
+-0xffffffff,
+-0x5a4e5bff,
+-0xffffffff,
+-0xffffffff,
+-0x6264c816,
+-0x43aaa26e,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x05445816,
+-0xffffffff,
+-0x5a4a5bff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x3455fc1b,
+-0x0c5a701c,
+-0x6366cbff,
+-0x0e3c7000,
+-0xffffffff,
+-0x05405816,
+-0xffffffff,
+-0x59465bff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x41aaa276,
+-0x0c56701c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x21aa7275,
+-0x0b52701c,
+-0x61489016,
+-0x6465fc33,
+-0x8d77ffff,
+-0xffffffff,
+-0x7b87fc05,
+-0xffffffff,
+-0xffffffff,
+-0x2a126bff,
+-0x385a6fff,
+-0xffffffff,
+-0x446dfc16,
+-0xffffffff,
+-0x7473ffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x7d873000,
+-0xffffffff,
+-0x5c409016,
+-0x686fffff,
+-0x8187440d,
+-0xffffffff,
+-0xffffffff,
+-0x3554b81b,
+-0x8287fc0d,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x686bffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8d9ffc00,
+-0x737a5fff,
+-0x41aaaa75,
+-0xffffffff,
+-0xffffffff,
+-0x5e40801c,
+-0x0b42701c,
+-0x6b67ffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2b68d000,
+-0xffffffff,
+-0xffffffff,
+-0x6d133017,
+-0xffffffff,
+-0xffffffff,
+-0x4c59fc16,
+-0xffffffff,
+-0xffffffff,
+-0x110bfc1c,
+-0x3aab566e,
+-0xffffffff,
+-0x5052a7ff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6515fc28,
+-0x4a55fc16,
+-0x7f865c0d,
+-0x88a53c00,
+-0x41aaa296,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x4451fc16,
+-0xffffffff,
+-0x60448bff,
+-0x21aa7295,
+-0xffffffff,
+-0x3cab5676,
+-0x04106c1b,
+-0xffffffff,
+-0x78873807,
+-0xffffffff,
+-0xffffffff,
+-0x574dfc16,
+-0xffffffff,
+-0x4e53ffff,
+-0xffffffff,
+-0x09145816,
+-0xffffffff,
+-0x040c6c1b,
+-0x8287fc00,
+-0x5e50a01c,
+-0x6467fc32,
+-0xffffffff,
+-0x5749fc16,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2a105816,
+-0x2e3e7c00,
+-0x04086c1b,
+-0x7083fc00,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5645fc16,
+-0xffffffff,
+-0x22aa6e6e,
+-0x5e42841c,
+-0x614e9c16,
+-0x090c5816,
+-0x04046c1b,
+-0x1eaa5ab3,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5441fc16,
+-0x41aaaa95,
+-0xffffffff,
+-0x5352a028,
+-0x09085816,
+-0x17505c16,
+-0x04006c1b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6b43ffff,
+-0xffffffff,
+-0x09045816,
+-0xffffffff,
+-0x43aaa2ae,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x083e5800,
+-0x7c865c00,
+-0xffffffff,
+-0x76753c15,
+-0x3051fc2e,
+-0x09005816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x3aab568e,
+-0xffffffff,
+-0x43aaa66e,
+-0xffffffff,
+-0x1daa5a71,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2a12701c,
+-0x5f66cfff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x3cab5696,
+-0xffffffff,
+-0x100e701c,
+-0x41aaa676,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2a125c17,
+-0x3654b82e,
+-0x100a701c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x1006701c,
+-0xffffffff,
+-0x1951fc19,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x23aa6e8e,
+-0xffffffff,
+-0x5b4e8016,
+-0xffffffff,
+-0x1eaa5ad3,
+-0x1002701c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x29130c1a,
+-0xffffffff,
+-0xffffffff,
+-0x0d4c7016,
+-0xffffffff,
+-0x475273ff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5b468016,
+-0x0d487016,
+-0x5a4e73ff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5d54a816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5a4a73ff,
+-0x6615fc16,
+-0x3bab56ae,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x594673ff,
+-0xffffffff,
+-0x61468c16,
+-0x8d17ffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2a13fc1a,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6913ffff,
+-0x40abfeb3,
+-0x8db9ffff,
+-0x41aaa696,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6a0fffff,
+-0x8db5ffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x7a873c07,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6a0bffff,
+-0x3f695402,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x24aa6eae,
+-0xffffffff,
+-0xffffffff,
+-0x6a07ffff,
+-0xffffffff,
+-0xffffffff,
+-0x066e5816,
+-0xffffffff,
+-0x00666c1b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6a03ffff,
+-0xffffffff,
+-0x4b55fc1c,
+-0x066a5816,
+-0xffffffff,
+-0x00626c1b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x4851fc1c,
+-0x05665816,
+-0x18506016,
+-0x005e6c1b,
+-0x12986416,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8da1ffff,
+-0xffffffff,
+-0x3bab56ce,
+-0xffffffff,
+-0x43aaa6ae,
+-0xffffffff,
+-0xffffffff,
+-0x584ffc20,
+-0x7b87fc06,
+-0xffffffff,
+-0x5f4287ff,
+-0x8d9dffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x00566c1b,
+-0xffffffff,
+-0xffffffff,
+-0x584bfc20,
+-0x5253fc28,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5645fc1c,
+-0xffffffff,
+-0x40abfed3,
+-0x00526c1b,
+-0x8187440e,
+-0xffffffff,
+-0x5847fc20,
+-0x8287fc0e,
+-0xffffffff,
+-0xffffffff,
+-0x8b95ffff,
+-0x2e3c7800,
+-0x5441fc1c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x17505c1c,
+-0xffffffff,
+-0xffffffff,
+-0x41aaaa76,
+-0xffffffff,
+-0x614c9816,
+-0x8991ffff,
+-0x1daa5a6f,
+-0x05525816,
+-0x4d585bff,
+-0xffffffff,
+-0x8087400c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x1baa59d3,
+-0x828dffff,
+-0x25aa6ece,
+-0x054e5816,
+-0x76753c1b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2b68d001,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x8689ffff,
+-0xffffffff,
+-0x054a5816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x43aca01b,
+-0x05465816,
+-0x7f865c0e,
+-0x5a4c5bff,
+-0x39ab55d3,
+-0x01626c16,
+-0x02686fff,
+-0x3457fc1b,
+-0xffffffff,
+-0xffffffff,
+-0x0f3e7000,
+-0x3dab55ae,
+-0x05425816,
+-0x1951fc17,
+-0x59485bff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x3153fc1b,
+-0x0c58701c,
+-0x5f64cbff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x035a6c16,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x0b54701c,
+-0xffffffff,
+-0x8779ffff,
+-0x1faa71d5,
+-0xffffffff,
+-0xffffffff,
+-0x2d5eb81b,
+-0x72b5fc08,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x0b50701c,
+-0x456ffc16,
+-0x7b75ffff,
+-0xffffffff,
+-0xffffffff,
+-0x147e5c16,
+-0xffffffff,
+-0xffffffff,
+-0x2a106bff,
+-0xffffffff,
+-0x1eaa5ab4,
+-0x446bfc16,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x41aaaa96,
+-0xffffffff,
+-0x3556b81b,
+-0x87a5fc00,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x4e6dffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x3252b81b,
+-0xffffffff,
+-0x5e54a81c,
+-0xffffffff,
+-0xffffffff,
+-0x0b44701c,
+-0x28b05c00,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x73785fff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x0b40701c,
+-0xffffffff,
+-0x6b65ffff,
+-0xffffffff,
+-0xffffffff,
+-0x1daa5a72,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6266cc1b,
+-0xffffffff,
+-0x375bfc16,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x3f695400,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6d113017,
+-0x3ead541b,
+-0xffffffff,
+-0x5d448816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x18506416,
+-0xffffffff,
+-0xffffffff,
+-0x16b37400,
+-0xffffffff,
+-0x4653fc16,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x04126c1b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x574ffc16,
+-0xffffffff,
+-0x6855ffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x040e6c1b,
+-0x41aaa275,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x574bfc16,
+-0x6f826400,
+-0x6851ffff,
+-0x1eaa5ad4,
+-0x2a125816,
+-0xffffffff,
+-0x040a6c1b,
+-0x7185fc00,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x5747fc16,
+-0x7b87fc04,
+-0xffffffff,
+-0xffffffff,
+-0x090e5816,
+-0xffffffff,
+-0x04066c1b,
+-0x6e81fc00,
+-0x1aac6c1b,
+-0x1850601c,
+-0x2e5cbbff,
+-0x5543fc16,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x090a5816,
+-0xffffffff,
+-0x04026c1b,
+-0xffffffff,
+-0xffffffff,
+-0x8087440c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6c45ffff,
+-0x8287fc0c,
+-0x09065816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x6b41ffff,
+-0x3353fc2e,
+-0x09025816,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2f50bbff,
+-0x073c5800,
+-0x6266cc16,
+-0x5f4083ff,
+-0xffffffff,
+-0xffffffff,
+-0x43aca41b,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2a10701c,
+-0x6364cfff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x7e865c0c,
+-0xffffffff,
+-0xffffffff,
+-0x3656b82e,
+-0x41aaa295,
+-0x100c701c,
+-0x614a9416,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x2c5ebc1b,
+-0xffffffff,
+-0x2a105c17,
+-0xffffffff,
+-0x1008701c,
+-0x3cab5675,
+-0xffffffff,
+-0xffffffff,
+-0x77873806,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0x1004701c,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff,
+-0xffffffff
+-};
+-
+-#define fold_hashkey(k)	(lj_rol(lj_rol((k),17)-(k),16)%915)
+-
+diff --git a/src/lj_libdef.h b/src/lj_libdef.h
+deleted file mode 100644
+index 5693a58..0000000
+--- a/src/lj_libdef.h
++++ /dev/null
+@@ -1,393 +0,0 @@
+-/* This is a generated file. DO NOT EDIT! */
+-
+-#ifdef LJLIB_MODULE_base
+-#undef LJLIB_MODULE_base
+-static const lua_CFunction lj_lib_cf_base[] = {
+-  lj_ffh_assert,
+-  lj_ffh_next,
+-  lj_ffh_pairs,
+-  lj_ffh_ipairs_aux,
+-  lj_ffh_ipairs,
+-  lj_ffh_setmetatable,
+-  lj_cf_getfenv,
+-  lj_cf_setfenv,
+-  lj_ffh_rawget,
+-  lj_cf_rawset,
+-  lj_cf_rawequal,
+-  lj_cf_unpack,
+-  lj_cf_select,
+-  lj_ffh_tonumber,
+-  lj_ffh_tostring,
+-  lj_cf_error,
+-  lj_ffh_pcall,
+-  lj_cf_loadfile,
+-  lj_cf_load,
+-  lj_cf_loadstring,
+-  lj_cf_dofile,
+-  lj_cf_gcinfo,
+-  lj_cf_collectgarbage,
+-  lj_cf_newproxy,
+-  lj_cf_print
+-};
+-static const uint8_t lj_lib_init_base[] = {
+-2,0,28,70,97,115,115,101,114,116,195,110,105,108,199,98,111,111,108,101,97,
+-110,252,1,200,117,115,101,114,100,97,116,97,198,115,116,114,105,110,103,197,
+-117,112,118,97,108,198,116,104,114,101,97,100,197,112,114,111,116,111,200,102,
+-117,110,99,116,105,111,110,197,116,114,97,99,101,197,99,100,97,116,97,197,116,
+-97,98,108,101,252,9,198,110,117,109,98,101,114,132,116,121,112,101,68,110,101,
+-120,116,253,69,112,97,105,114,115,64,253,70,105,112,97,105,114,115,140,103,
+-101,116,109,101,116,97,116,97,98,108,101,76,115,101,116,109,101,116,97,116,
+-97,98,108,101,7,103,101,116,102,101,110,118,7,115,101,116,102,101,110,118,70,
+-114,97,119,103,101,116,6,114,97,119,115,101,116,8,114,97,119,101,113,117,97,
+-108,6,117,110,112,97,99,107,6,115,101,108,101,99,116,72,116,111,110,117,109,
+-98,101,114,195,110,105,108,197,102,97,108,115,101,196,116,114,117,101,72,116,
+-111,115,116,114,105,110,103,5,101,114,114,111,114,69,112,99,97,108,108,134,
+-120,112,99,97,108,108,8,108,111,97,100,102,105,108,101,4,108,111,97,100,10,
+-108,111,97,100,115,116,114,105,110,103,6,100,111,102,105,108,101,6,103,99,105,
+-110,102,111,14,99,111,108,108,101,99,116,103,97,114,98,97,103,101,252,2,8,110,
+-101,119,112,114,111,120,121,200,116,111,115,116,114,105,110,103,5,112,114,105,
+-110,116,252,3,200,95,86,69,82,83,73,79,78,250,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_coroutine
+-#undef LJLIB_MODULE_coroutine
+-static const lua_CFunction lj_lib_cf_coroutine[] = {
+-  lj_cf_coroutine_status,
+-  lj_cf_coroutine_running,
+-  lj_cf_coroutine_create,
+-  lj_ffh_coroutine_yield,
+-  lj_ffh_coroutine_resume,
+-  lj_cf_coroutine_wrap
+-};
+-static const uint8_t lj_lib_init_coroutine[] = {
+-30,13,6,6,115,116,97,116,117,115,7,114,117,110,110,105,110,103,6,99,114,101,
+-97,116,101,69,121,105,101,108,100,70,114,101,115,117,109,101,254,4,119,114,
+-97,112,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_math
+-#undef LJLIB_MODULE_math
+-static const lua_CFunction lj_lib_cf_math[] = {
+-  lj_ffh_math_abs,
+-  lj_ffh_math_sqrt,
+-  lj_ffh_math_log,
+-  lj_ffh_math_atan2,
+-  lj_ffh_math_ldexp,
+-  lj_ffh_math_min,
+-  lj_cf_math_random,
+-  lj_cf_math_randomseed
+-};
+-static const uint8_t lj_lib_init_math[] = {
+-37,16,30,67,97,98,115,133,102,108,111,111,114,132,99,101,105,108,68,115,113,
+-114,116,133,108,111,103,49,48,131,101,120,112,131,115,105,110,131,99,111,115,
+-131,116,97,110,132,97,115,105,110,132,97,99,111,115,132,97,116,97,110,132,115,
+-105,110,104,132,99,111,115,104,132,116,97,110,104,133,102,114,101,120,112,132,
+-109,111,100,102,251,248,193,99,26,220,165,76,64,131,100,101,103,251,57,157,
+-82,162,70,223,145,63,131,114,97,100,67,108,111,103,69,97,116,97,110,50,131,
+-112,111,119,132,102,109,111,100,69,108,100,101,120,112,67,109,105,110,131,109,
+-97,120,251,24,45,68,84,251,33,9,64,194,112,105,250,251,0,0,0,0,0,0,240,127,
+-196,104,117,103,101,250,252,2,6,114,97,110,100,111,109,252,2,10,114,97,110,
+-100,111,109,115,101,101,100,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_bit
+-#undef LJLIB_MODULE_bit
+-static const lua_CFunction lj_lib_cf_bit[] = {
+-  lj_ffh_bit_tobit,
+-  lj_ffh_bit_lshift,
+-  lj_ffh_bit_band,
+-  lj_cf_bit_tohex
+-};
+-static const uint8_t lj_lib_init_bit[] = {
+-65,42,12,69,116,111,98,105,116,132,98,110,111,116,133,98,115,119,97,112,70,
+-108,115,104,105,102,116,134,114,115,104,105,102,116,135,97,114,115,104,105,
+-102,116,131,114,111,108,131,114,111,114,68,98,97,110,100,131,98,111,114,132,
+-98,120,111,114,5,116,111,104,101,120,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_string
+-#undef LJLIB_MODULE_string
+-static const lua_CFunction lj_lib_cf_string[] = {
+-  lj_ffh_string_len,
+-  lj_ffh_string_byte,
+-  lj_ffh_string_char,
+-  lj_ffh_string_sub,
+-  lj_ffh_string_rep,
+-  lj_ffh_string_reverse,
+-  lj_cf_string_dump,
+-  lj_cf_string_find,
+-  lj_cf_string_match,
+-  lj_cf_string_gmatch,
+-  lj_cf_string_gsub,
+-  lj_cf_string_format
+-};
+-static const uint8_t lj_lib_init_string[] = {
+-77,53,14,67,108,101,110,68,98,121,116,101,68,99,104,97,114,67,115,117,98,67,
+-114,101,112,71,114,101,118,101,114,115,101,133,108,111,119,101,114,133,117,
+-112,112,101,114,4,100,117,109,112,4,102,105,110,100,5,109,97,116,99,104,254,
+-6,103,109,97,116,99,104,4,103,115,117,98,6,102,111,114,109,97,116,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_table
+-#undef LJLIB_MODULE_table
+-static const lua_CFunction lj_lib_cf_table[] = {
+-  lj_cf_table_foreachi,
+-  lj_cf_table_foreach,
+-  lj_ffh_table_getn,
+-  lj_cf_table_maxn,
+-  lj_cf_table_insert,
+-  lj_cf_table_remove,
+-  lj_cf_table_concat,
+-  lj_cf_table_sort
+-};
+-static const uint8_t lj_lib_init_table[] = {
+-92,61,8,8,102,111,114,101,97,99,104,105,7,102,111,114,101,97,99,104,68,103,
+-101,116,110,4,109,97,120,110,6,105,110,115,101,114,116,6,114,101,109,111,118,
+-101,6,99,111,110,99,97,116,4,115,111,114,116,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_io_method
+-#undef LJLIB_MODULE_io_method
+-static const lua_CFunction lj_lib_cf_io_method[] = {
+-  lj_cf_io_method_close,
+-  lj_cf_io_method_read,
+-  lj_cf_io_method_write,
+-  lj_cf_io_method_flush,
+-  lj_cf_io_method_seek,
+-  lj_cf_io_method_setvbuf,
+-  lj_cf_io_method_lines,
+-  lj_cf_io_method___gc,
+-  lj_cf_io_method___tostring
+-};
+-static const uint8_t lj_lib_init_io_method[] = {
+-100,62,10,5,99,108,111,115,101,4,114,101,97,100,5,119,114,105,116,101,5,102,
+-108,117,115,104,4,115,101,101,107,7,115,101,116,118,98,117,102,5,108,105,110,
+-101,115,4,95,95,103,99,10,95,95,116,111,115,116,114,105,110,103,252,1,199,95,
+-95,105,110,100,101,120,250,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_io
+-#undef LJLIB_MODULE_io
+-static const lua_CFunction lj_lib_cf_io[] = {
+-  lj_cf_io_open,
+-  lj_cf_io_popen,
+-  lj_cf_io_tmpfile,
+-  lj_cf_io_close,
+-  lj_cf_io_read,
+-  lj_cf_io_write,
+-  lj_cf_io_flush,
+-  lj_cf_io_input,
+-  lj_cf_io_output,
+-  lj_cf_io_lines,
+-  lj_cf_io_type
+-};
+-static const uint8_t lj_lib_init_io[] = {
+-109,62,12,252,2,192,250,4,111,112,101,110,5,112,111,112,101,110,7,116,109,112,
+-102,105,108,101,5,99,108,111,115,101,4,114,101,97,100,5,119,114,105,116,101,
+-5,102,108,117,115,104,5,105,110,112,117,116,6,111,117,116,112,117,116,5,108,
+-105,110,101,115,4,116,121,112,101,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_os
+-#undef LJLIB_MODULE_os
+-static const lua_CFunction lj_lib_cf_os[] = {
+-  lj_cf_os_execute,
+-  lj_cf_os_remove,
+-  lj_cf_os_rename,
+-  lj_cf_os_tmpname,
+-  lj_cf_os_getenv,
+-  lj_cf_os_exit,
+-  lj_cf_os_clock,
+-  lj_cf_os_date,
+-  lj_cf_os_time,
+-  lj_cf_os_difftime,
+-  lj_cf_os_setlocale
+-};
+-static const uint8_t lj_lib_init_os[] = {
+-120,62,11,7,101,120,101,99,117,116,101,6,114,101,109,111,118,101,6,114,101,
+-110,97,109,101,7,116,109,112,110,97,109,101,6,103,101,116,101,110,118,4,101,
+-120,105,116,5,99,108,111,99,107,4,100,97,116,101,4,116,105,109,101,8,100,105,
+-102,102,116,105,109,101,9,115,101,116,108,111,99,97,108,101,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_debug
+-#undef LJLIB_MODULE_debug
+-static const lua_CFunction lj_lib_cf_debug[] = {
+-  lj_cf_debug_getregistry,
+-  lj_cf_debug_getmetatable,
+-  lj_cf_debug_setmetatable,
+-  lj_cf_debug_getfenv,
+-  lj_cf_debug_setfenv,
+-  lj_cf_debug_getinfo,
+-  lj_cf_debug_getlocal,
+-  lj_cf_debug_setlocal,
+-  lj_cf_debug_getupvalue,
+-  lj_cf_debug_setupvalue,
+-  lj_cf_debug_upvalueid,
+-  lj_cf_debug_upvaluejoin,
+-  lj_cf_debug_sethook,
+-  lj_cf_debug_gethook,
+-  lj_cf_debug_debug,
+-  lj_cf_debug_traceback
+-};
+-static const uint8_t lj_lib_init_debug[] = {
+-131,62,16,11,103,101,116,114,101,103,105,115,116,114,121,12,103,101,116,109,
+-101,116,97,116,97,98,108,101,12,115,101,116,109,101,116,97,116,97,98,108,101,
+-7,103,101,116,102,101,110,118,7,115,101,116,102,101,110,118,7,103,101,116,105,
+-110,102,111,8,103,101,116,108,111,99,97,108,8,115,101,116,108,111,99,97,108,
+-10,103,101,116,117,112,118,97,108,117,101,10,115,101,116,117,112,118,97,108,
+-117,101,9,117,112,118,97,108,117,101,105,100,11,117,112,118,97,108,117,101,
+-106,111,105,110,7,115,101,116,104,111,111,107,7,103,101,116,104,111,111,107,
+-5,100,101,98,117,103,9,116,114,97,99,101,98,97,99,107,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_jit
+-#undef LJLIB_MODULE_jit
+-static const lua_CFunction lj_lib_cf_jit[] = {
+-  lj_cf_jit_on,
+-  lj_cf_jit_off,
+-  lj_cf_jit_flush,
+-  lj_cf_jit_status,
+-  lj_cf_jit_attach
+-};
+-static const uint8_t lj_lib_init_jit[] = {
+-147,62,9,2,111,110,3,111,102,102,5,102,108,117,115,104,6,115,116,97,116,117,
+-115,6,97,116,116,97,99,104,252,5,194,111,115,250,252,4,196,97,114,99,104,250,
+-252,3,203,118,101,114,115,105,111,110,95,110,117,109,250,252,2,199,118,101,
+-114,115,105,111,110,250,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_jit_util
+-#undef LJLIB_MODULE_jit_util
+-static const lua_CFunction lj_lib_cf_jit_util[] = {
+-  lj_cf_jit_util_funcinfo,
+-  lj_cf_jit_util_funcbc,
+-  lj_cf_jit_util_funck,
+-  lj_cf_jit_util_funcuvname,
+-  lj_cf_jit_util_traceinfo,
+-  lj_cf_jit_util_traceir,
+-  lj_cf_jit_util_tracek,
+-  lj_cf_jit_util_tracesnap,
+-  lj_cf_jit_util_tracemc,
+-  lj_cf_jit_util_traceexitstub,
+-  lj_cf_jit_util_ircalladdr
+-};
+-static const uint8_t lj_lib_init_jit_util[] = {
+-152,62,11,8,102,117,110,99,105,110,102,111,6,102,117,110,99,98,99,5,102,117,
+-110,99,107,10,102,117,110,99,117,118,110,97,109,101,9,116,114,97,99,101,105,
+-110,102,111,7,116,114,97,99,101,105,114,6,116,114,97,99,101,107,9,116,114,97,
+-99,101,115,110,97,112,7,116,114,97,99,101,109,99,13,116,114,97,99,101,101,120,
+-105,116,115,116,117,98,10,105,114,99,97,108,108,97,100,100,114,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_jit_opt
+-#undef LJLIB_MODULE_jit_opt
+-static const lua_CFunction lj_lib_cf_jit_opt[] = {
+-  lj_cf_jit_opt_start
+-};
+-static const uint8_t lj_lib_init_jit_opt[] = {
+-163,62,1,5,115,116,97,114,116,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_ffi_meta
+-#undef LJLIB_MODULE_ffi_meta
+-static const lua_CFunction lj_lib_cf_ffi_meta[] = {
+-  lj_cf_ffi_meta___index,
+-  lj_cf_ffi_meta___newindex,
+-  lj_cf_ffi_meta___eq,
+-  lj_cf_ffi_meta___len,
+-  lj_cf_ffi_meta___lt,
+-  lj_cf_ffi_meta___le,
+-  lj_cf_ffi_meta___concat,
+-  lj_cf_ffi_meta___call,
+-  lj_cf_ffi_meta___add,
+-  lj_cf_ffi_meta___sub,
+-  lj_cf_ffi_meta___mul,
+-  lj_cf_ffi_meta___div,
+-  lj_cf_ffi_meta___mod,
+-  lj_cf_ffi_meta___pow,
+-  lj_cf_ffi_meta___unm,
+-  lj_cf_ffi_meta___tostring,
+-  lj_cf_ffi_meta___pairs,
+-  lj_cf_ffi_meta___ipairs
+-};
+-static const uint8_t lj_lib_init_ffi_meta[] = {
+-164,62,19,7,95,95,105,110,100,101,120,10,95,95,110,101,119,105,110,100,101,
+-120,4,95,95,101,113,5,95,95,108,101,110,4,95,95,108,116,4,95,95,108,101,8,95,
+-95,99,111,110,99,97,116,6,95,95,99,97,108,108,5,95,95,97,100,100,5,95,95,115,
+-117,98,5,95,95,109,117,108,5,95,95,100,105,118,5,95,95,109,111,100,5,95,95,
+-112,111,119,5,95,95,117,110,109,10,95,95,116,111,115,116,114,105,110,103,7,
+-95,95,112,97,105,114,115,8,95,95,105,112,97,105,114,115,195,102,102,105,203,
+-95,95,109,101,116,97,116,97,98,108,101,250,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_ffi_clib
+-#undef LJLIB_MODULE_ffi_clib
+-static const lua_CFunction lj_lib_cf_ffi_clib[] = {
+-  lj_cf_ffi_clib___index,
+-  lj_cf_ffi_clib___newindex,
+-  lj_cf_ffi_clib___gc
+-};
+-static const uint8_t lj_lib_init_ffi_clib[] = {
+-182,62,3,7,95,95,105,110,100,101,120,10,95,95,110,101,119,105,110,100,101,120,
+-4,95,95,103,99,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_ffi_callback
+-#undef LJLIB_MODULE_ffi_callback
+-static const lua_CFunction lj_lib_cf_ffi_callback[] = {
+-  lj_cf_ffi_callback_free,
+-  lj_cf_ffi_callback_set
+-};
+-static const uint8_t lj_lib_init_ffi_callback[] = {
+-185,62,3,4,102,114,101,101,3,115,101,116,252,1,199,95,95,105,110,100,101,120,
+-250,255
+-};
+-#endif
+-
+-#ifdef LJLIB_MODULE_ffi
+-#undef LJLIB_MODULE_ffi
+-static const lua_CFunction lj_lib_cf_ffi[] = {
+-  lj_cf_ffi_cdef,
+-  lj_cf_ffi_new,
+-  lj_cf_ffi_cast,
+-  lj_cf_ffi_typeof,
+-  lj_cf_ffi_istype,
+-  lj_cf_ffi_sizeof,
+-  lj_cf_ffi_alignof,
+-  lj_cf_ffi_offsetof,
+-  lj_cf_ffi_errno,
+-  lj_cf_ffi_string,
+-  lj_cf_ffi_copy,
+-  lj_cf_ffi_fill,
+-  lj_cf_ffi_abi,
+-  lj_cf_ffi_metatype,
+-  lj_cf_ffi_gc,
+-  lj_cf_ffi_load
+-};
+-static const uint8_t lj_lib_init_ffi[] = {
+-187,62,22,4,99,100,101,102,3,110,101,119,4,99,97,115,116,6,116,121,112,101,
+-111,102,6,105,115,116,121,112,101,6,115,105,122,101,111,102,7,97,108,105,103,
+-110,111,102,8,111,102,102,115,101,116,111,102,5,101,114,114,110,111,6,115,116,
+-114,105,110,103,4,99,111,112,121,4,102,105,108,108,3,97,98,105,252,8,192,250,
+-8,109,101,116,97,116,121,112,101,252,7,192,250,2,103,99,252,5,192,250,4,108,
+-111,97,100,252,4,193,67,250,252,3,194,111,115,250,252,2,196,97,114,99,104,250,
+-255
+-};
+-#endif
+-
+diff --git a/src/lj_load.c b/src/lj_load.c
+index 9a31d9a..bd97c73 100644
+--- a/src/lj_load.c
++++ b/src/lj_load.c
+@@ -23,6 +23,10 @@
+ #include "lj_bcdump.h"
+ #include "lj_parse.h"
+ 
++#if LJ_UTF8
++#include "lioutf8.h"
++#endif
++
+ /* -- Load Lua source code and bytecode ----------------------------------- */
+ 
+ static TValue *cpparser(lua_State *L, lua_CFunction dummy, void *ud)
+@@ -88,7 +92,11 @@ LUALIB_API int luaL_loadfilex(lua_State *L, const char *filename,
+   int status;
+   const char *chunkname;
+   if (filename) {
++#if LJ_UTF8
++    ctx.fp = utf8_fopen(filename, "rb");
++#else
+     ctx.fp = fopen(filename, "rb");
++#endif
+     if (ctx.fp == NULL) {
+       lua_pushfstring(L, "cannot open %s: %s", filename, strerror(errno));
+       return LUA_ERRFILE;
+diff --git a/src/lj_recdef.h b/src/lj_recdef.h
+deleted file mode 100644
+index 2c3c9be..0000000
+--- a/src/lj_recdef.h
++++ /dev/null
+@@ -1,263 +0,0 @@
+-/* This is a generated file. DO NOT EDIT! */
+-
+-static const uint16_t recff_idmap[] = {
+-0,
+-0x0100,
+-0x0200,
+-0x0300,
+-0,
+-0,
+-0x0400,
+-0x0500,
+-0x0600,
+-0x0700,
+-0,
+-0,
+-0x0800,
+-0x0900,
+-0x0a00,
+-0,
+-0x0b00,
+-0x0c00,
+-0x0d00,
+-0,
+-0x0e00,
+-0x0f00,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0x1000,
+-0x1100+(IRFPM_FLOOR),
+-0x1100+(IRFPM_CEIL),
+-0x1200+(IRFPM_SQRT),
+-0x1200+(IRFPM_LOG10),
+-0x1200+(IRFPM_EXP),
+-0x1200+(IRFPM_SIN),
+-0x1200+(IRFPM_COS),
+-0x1200+(IRFPM_TAN),
+-0x1300+(FF_math_asin),
+-0x1300+(FF_math_acos),
+-0x1300+(FF_math_atan),
+-0x1400+(IRCALL_sinh),
+-0x1400+(IRCALL_cosh),
+-0x1400+(IRCALL_tanh),
+-0,
+-0x1500,
+-0x1600,
+-0x1600,
+-0x1700,
+-0x1800,
+-0x1900,
+-0,
+-0x1a00,
+-0x1b00+(IR_MIN),
+-0x1b00+(IR_MAX),
+-0x1c00,
+-0,
+-0x1d00+(IR_TOBIT),
+-0x1d00+(IR_BNOT),
+-0x1d00+(IR_BSWAP),
+-0x1e00+(IR_BSHL),
+-0x1e00+(IR_BSHR),
+-0x1e00+(IR_BSAR),
+-0x1e00+(IR_BROL),
+-0x1e00+(IR_BROR),
+-0x1f00+(IR_BAND),
+-0x1f00+(IR_BOR),
+-0x1f00+(IR_BXOR),
+-0,
+-0x2000,
+-0x2100+(0),
+-0,
+-0x2100+(1),
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0x2200,
+-0,
+-0x2300,
+-0x2400,
+-0,
+-0,
+-0,
+-0,
+-0x2500+(0),
+-0x2600+(0),
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0x2500+(GCROOT_IO_OUTPUT),
+-0x2600+(GCROOT_IO_OUTPUT),
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0,
+-0x2700+(0),
+-0x2700+(1),
+-0x2800+(MM_eq),
+-0x2800+(MM_len),
+-0x2800+(MM_lt),
+-0x2800+(MM_le),
+-0x2800+(MM_concat),
+-0x2900,
+-0x2800+(MM_add),
+-0x2800+(MM_sub),
+-0x2800+(MM_mul),
+-0x2800+(MM_div),
+-0x2800+(MM_mod),
+-0x2800+(MM_pow),
+-0x2800+(MM_unm),
+-0,
+-0,
+-0,
+-0x2a00+(1),
+-0x2a00+(0),
+-0,
+-0,
+-0,
+-0,
+-0x2b00,
+-0x2b00,
+-0x2c00,
+-0x2d00,
+-0x2e00+(FF_ffi_sizeof),
+-0x2e00+(FF_ffi_alignof),
+-0x2e00+(FF_ffi_offsetof),
+-0x2f00,
+-0x3000,
+-0x3100,
+-0x3200,
+-0x3300,
+-0,
+-0x3400
+-};
+-
+-static const RecordFunc recff_func[] = {
+-recff_nyi,
+-recff_c,
+-recff_assert,
+-recff_type,
+-recff_ipairs_aux,
+-recff_ipairs,
+-recff_getmetatable,
+-recff_setmetatable,
+-recff_rawget,
+-recff_rawset,
+-recff_rawequal,
+-recff_select,
+-recff_tonumber,
+-recff_tostring,
+-recff_pcall,
+-recff_xpcall,
+-recff_math_abs,
+-recff_math_round,
+-recff_math_unary,
+-recff_math_atrig,
+-recff_math_htrig,
+-recff_math_modf,
+-recff_math_degrad,
+-recff_math_log,
+-recff_math_atan2,
+-recff_math_pow,
+-recff_math_ldexp,
+-recff_math_minmax,
+-recff_math_random,
+-recff_bit_unary,
+-recff_bit_shift,
+-recff_bit_nary,
+-recff_string_len,
+-recff_string_range,
+-recff_table_getn,
+-recff_table_insert,
+-recff_table_remove,
+-recff_io_write,
+-recff_io_flush,
+-recff_cdata_index,
+-recff_cdata_arith,
+-recff_cdata_call,
+-recff_clib_index,
+-recff_ffi_new,
+-recff_ffi_typeof,
+-recff_ffi_istype,
+-recff_ffi_xof,
+-recff_ffi_errno,
+-recff_ffi_string,
+-recff_ffi_copy,
+-recff_ffi_fill,
+-recff_ffi_abi,
+-recff_ffi_gc
+-};
+-
+diff --git a/src/msvcbuild.bat b/src/msvcbuild.bat
+index eb8c848..f8b42b4 100644
+--- a/src/msvcbuild.bat
++++ b/src/msvcbuild.bat
+@@ -53,6 +53,11 @@ minilua %DASM% -LN %DASMFLAGS% -o host\buildvm_arch.h %DASC%
+ @set LJCOMPILE=%LJCOMPILE% /DLUAJIT_ENABLE_LUA52COMPAT
+ :NOLUA52COMPAT
+ 
++@if "%1" neq "utf8script" goto :NOUTF8SCRIPT
++@shift
++@set LJCOMPILE=%LJCOMPILE% /DLUAJIT_ENABLE_UTF8SCRIPT
++:NOUTF8SCRIPT
++
+ %LJCOMPILE% /I "." /I %DASMDIR% host\buildvm*.c
+ @if errorlevel 1 goto :BAD
+ %LJLINK% /out:buildvm.exe buildvm*.obj
+@@ -82,15 +87,15 @@ buildvm -m folddef -o lj_folddef.h lj_opt_fold.c
+ :NODEBUG
+ @if "%1"=="amalg" goto :AMALGDLL
+ @if "%1"=="static" goto :STATIC
+-%LJCOMPILE% /MD /DLUA_BUILD_AS_DLL lj_*.c lib_*.c compat-5.2.c
++%LJCOMPILE% /MD /DLUA_BUILD_AS_DLL lj_*.c lib_*.c compat-5.2.c lioutf8.c
+ @if errorlevel 1 goto :BAD
+-%LJLINK% /DLL /out:%LJDLLNAME% lj_*.obj lib_*.obj compat-5.2.obj
++%LJLINK% /DLL /out:%LJDLLNAME% lj_*.obj lib_*.obj compat-5.2.obj lioutf8.obj
+ @if errorlevel 1 goto :BAD
+ @goto :MTDLL
+ :STATIC
+-%LJCOMPILE% lj_*.c lib_*.c
++%LJCOMPILE% lj_*.c lib_*.c compat-5.2.c lioutf8.c
+ @if errorlevel 1 goto :BAD
+-%LJLIB% /OUT:%LJLIBNAME% lj_*.obj lib_*.obj
++%LJLIB% /OUT:%LJLIBNAME% lj_*.obj lib_*.obj compat-5.2.obj lioutf8.obj
+ @if errorlevel 1 goto :BAD
+ @goto :MTDLL
+ :AMALGDLL
