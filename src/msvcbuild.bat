@@ -53,6 +53,11 @@ minilua %DASM% -LN %DASMFLAGS% -o host\buildvm_arch.h %DASC%
 @set LJCOMPILE=%LJCOMPILE% /DLUAJIT_ENABLE_LUA52COMPAT
 :NOLUA52COMPAT
 
+@if "%1" neq "utf8script" goto :NOUTF8SCRIPT
+@shift
+@set LJCOMPILE=%LJCOMPILE% /DLUAJIT_ENABLE_UTF8SCRIPT
+:NOUTF8SCRIPT
+
 %LJCOMPILE% /I "." /I %DASMDIR% host\buildvm*.c
 @if errorlevel 1 goto :BAD
 %LJLINK% /out:buildvm.exe buildvm*.obj
@@ -82,15 +87,15 @@ buildvm -m folddef -o lj_folddef.h lj_opt_fold.c
 :NODEBUG
 @if "%1"=="amalg" goto :AMALGDLL
 @if "%1"=="static" goto :STATIC
-%LJCOMPILE% /MD /DLUA_BUILD_AS_DLL lj_*.c lib_*.c compat-5.2.c
+%LJCOMPILE% /MD /DLUA_BUILD_AS_DLL lj_*.c lib_*.c compat-5.2.c lioutf8.c
 @if errorlevel 1 goto :BAD
-%LJLINK% /DLL /out:%LJDLLNAME% lj_*.obj lib_*.obj compat-5.2.obj
+%LJLINK% /DLL /out:%LJDLLNAME% lj_*.obj lib_*.obj compat-5.2.obj lioutf8.obj
 @if errorlevel 1 goto :BAD
 @goto :MTDLL
 :STATIC
-%LJCOMPILE% lj_*.c lib_*.c
+%LJCOMPILE% lj_*.c lib_*.c compat-5.2.c lioutf8.c
 @if errorlevel 1 goto :BAD
-%LJLIB% /OUT:%LJLIBNAME% lj_*.obj lib_*.obj
+%LJLIB% /OUT:%LJLIBNAME% lj_*.obj lib_*.obj compat-5.2.obj lioutf8.obj
 @if errorlevel 1 goto :BAD
 @goto :MTDLL
 :AMALGDLL

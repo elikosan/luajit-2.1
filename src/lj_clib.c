@@ -18,6 +18,10 @@
 #include "lj_clib.h"
 #include "lj_strfmt.h"
 
+#if LJ_UTF8
+#include "lioutf8.h"
+#endif
+
 /* -- OS-specific functions ----------------------------------------------- */
 
 #if LJ_TARGET_DLOPEN
@@ -208,7 +212,13 @@ static const char *clib_extname(lua_State *L, const char *name)
 static void *clib_loadlib(lua_State *L, const char *name, int global)
 {
   DWORD oldwerr = GetLastError();
+#if LJ_UTF8
+  wchar_t *wname = cc2wc(clib_extname(L, name));
+  void *h = (void *)LoadLibraryExW(wname, NULL, 0);
+  free(wname);
+#else
   void *h = (void *)LoadLibraryExA(clib_extname(L, name), NULL, 0);
+#endif
   if (!h) clib_error(L, "cannot load module " LUA_QS ": %s", name);
   SetLastError(oldwerr);
   UNUSED(global);
