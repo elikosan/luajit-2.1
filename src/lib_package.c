@@ -573,7 +573,7 @@ static void setpath(lua_State *L, const char *fieldname, const char *envname,
     lua_remove(L, -2);
   }
 #if !LJ_TARGET_CONSOLE && LJ_UTF8
-  free(path);
+  if ( path != NULL ) free(path);
 #endif
   setprogdir(L);
   lua_setfield(L, -2, fieldname);
