@@ -108,7 +108,7 @@ LJLIB_CF(os_getenv)
 #if LJ_TARGET_CONSOLE
   lua_pushnil(L);
 #else
-#ifdef LJ_UTF8
+#if LJ_UTF8
   char *env = utf8_getenv(luaL_checkstring(L, 1));
   lua_pushstring(L, env);  /* if NULL push nil */
   if ( env != NULL ) free(env);
