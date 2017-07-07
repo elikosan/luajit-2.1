@@ -67,7 +67,7 @@ FILE* utf8_popen(const char *filename, const char *mode)
     free( wmode );
     return fp;
 #else
-    return popen(filename, mode, stream); 
+    return popen(filename, mode); 
 #endif
 }
 
